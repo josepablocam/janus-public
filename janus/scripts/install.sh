@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -ex
+
 function install_conda_if_needed() {
     if ! command -v conda &> /dev/null
       then
@@ -31,7 +33,7 @@ pip install -e .
 popd
 
 
-if [[ ${1} == --kaggle ]]
+if [[ "$#" -eq 1 ]] && [[ "${1}" == --kaggle ]]
 then
   # install packages specific to kaggle scripts we want to run
   # don't pollute broader environment in general, only if prompted with
