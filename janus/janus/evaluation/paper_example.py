@@ -145,11 +145,25 @@ def show_edit_ops(tree_pairs_corpus, seed=42):
     return add_ellipsis_row(df)
 
 
+def rule_name_for_paper(r_str):
+    names = {
+        "ComponentInsert": "CInsert",
+        "ComponentRemove": "CRemove",
+        "ComponentUpdate": "CUpdate",
+        "HyperparamRemove": "HRemove",
+        "HyperparamUpdate": "HUpdate",
+    }
+    for orig, replacement in names.items():
+        r_str = r_str.replace(orig, replacement)
+    return r_str
+
+
 def show_rules(df_rules, seed=42):
     # to latex html table
     # show rules of each type
     # for ComponentInsert pick ones that don't
     # just insert a stacking estimator
+    df_rules = df_rules.copy()
     cond_insert = (
         df_rules["type_str"] == "ComponentInsert"
     ) & (df_rules["post_label"].map(
@@ -158,7 +172,9 @@ def show_rules(df_rules, seed=42):
     df_rules = df_rules[cond_insert | others]
     df_rules = df_rules.sample(frac=1, replace=False, random_state=seed)
     df_rules = df_rules.groupby("type_str").head(1)
-    rule_strs = df_rules["rule"].map(lambda x: x.as_str())
+    df_rules["rule_str"] = df_rules["rule"].map(lambda x: x.as_str())
+    df_rules["rule_str"] = df_rules["rule_str"].map(rule_name_for_paper)
+    rule_strs = df_rules["rule_str"]
     df = rule_strs.to_frame(name="LSR")
     return add_ellipsis_row(df)
 

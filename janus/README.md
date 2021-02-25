@@ -11,6 +11,7 @@ However, you may want to use the docker image for a quick test. If so,
 we assume you have docker installed and you can run:
 
 ```
+git submodule update
 bash scripts/build_docker.sh
 ```
 

@@ -3,6 +3,9 @@
 if [[ -f ~/miniconda3/etc/profile.d/conda.sh ]]
 then
     source ~/miniconda3/etc/profile.d/conda.sh
+elif [[ -f /usr/local/opt/miniconda3/etc/profile.d/conda.sh ]]
+then
+    source /usr/local/opt/miniconda3/etc/profile.d/conda.sh
 else
     # assume we're on rhino
     source "/raid/$(whoami)/miniconda3/etc/profile.d/conda.sh"

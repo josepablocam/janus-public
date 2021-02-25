@@ -250,8 +250,8 @@ def plot_score_improvement(df):
         ci=95,
         ax=ax,
     )
-    ax.set_xlabel("Dataset")
-    ax.set_ylabel("Score Improvement\n(both improved)")
+    ax.set_ylabel("Dataset")
+    ax.set_xlabel("Score Improvement\n(both improved)")
     plt.legend(loc="center right", bbox_to_anchor=(0., 1.02, 1., .102), ncol=2)
     plt.tight_layout()
     return ax

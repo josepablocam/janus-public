@@ -469,10 +469,29 @@ def md5(obj):
     return hashlib.md5(s).hexdigest()
 
 
+def dot_stub_label(node):
+    if is_root_node(node):
+        return "root"
+    elif is_param_node(node):
+        return "p"
+    elif is_component_node(node):
+        if "Pipeline" in node.label:
+            return "Pipeline"
+        else:
+            return "C"
+
+
 class Dotifier(object):
-    def __init__(self, obj):
+    def __init__(self, obj, max_children=None, label_fun=None):
         self.node_ct = 0
         self.node_map = {}
+
+        if max_children is not None:
+            assert max_children > 0
+        self.max_children = max_children
+
+        self.label_fun = label_fun
+
         self.dot = graphviz.Digraph()
         t = to_tree(obj)
         self.to_dot(t)
@@ -482,7 +501,11 @@ class Dotifier(object):
             node_id = "node_{}".format(self.node_ct)
             self.node_ct += 1
             self.node_map[n] = node_id
-            self.dot.node(node_id, n.label)
+            if self.label_fun is not None:
+                label = self.label_fun(n)
+            else:
+                label = n.label
+            self.dot.node(node_id, label)
 
         return self.node_map[n]
 
@@ -497,7 +520,12 @@ class Dotifier(object):
             n = n.children[0]
 
         self.add_node(n)
-        for c in n.children:
+
+        children = n.children
+        if self.max_children is not None:
+            children = children[:self.max_children]
+
+        for c in children:
             self.add_node(c)
             self.add_edge(n, c)
             self.to_dot(c)
@@ -506,18 +534,23 @@ class Dotifier(object):
         self.dot.render(path, view=view)
 
 
-def to_dot(obj, path=None, view=False):
-    dotter = Dotifier(obj)
+def to_dot(obj, path=None, view=False, max_children=None, label_fun=None):
+    dotter = Dotifier(obj, max_children=max_children, label_fun=label_fun)
     if path is not None:
         dotter.dump(path, view=view)
     return dotter.dot.source
 
 
 class Texter(object):
-    def __init__(self, obj, indent_str="  "):
+    def __init__(self, obj, indent_str="  ", max_children=None):
         self.text = ""
         self.indent_str = indent_str
         self.ident_ct = 0
+
+        if max_children is not None:
+            assert max_children > 0
+        self.max_children = max_children
+
         t = to_tree(obj)
         self.to_text(t)
 
@@ -534,11 +567,16 @@ class Texter(object):
             n = n.children[0]
 
         self.add_node(n)
-        for c in n.children:
+
+        children = n.children
+        if self.max_children is not None:
+            children = children[:self.max_children]
+
+        for c in nchildren:
             self.ident_ct += 1
             self.to_text(c)
             self.ident_ct -= 1
 
 
-def to_text(obj, indent_str="  "):
-    return Texter(obj, indent_str=indent_str).text
+def to_text(obj, indent_str="  ", max_children=None):
+    return Texter(obj, indent_str=indent_str, max_children=max_children).text
