@@ -1,6 +1,7 @@
 import copy
 import hashlib
 import importlib
+import re
 
 import graphviz
 import numpy as np
@@ -262,15 +263,21 @@ def to_tree(pipeline):
     return root
 
 
-def to_json(node):
+def to_json(node, payload_as_str=False):
     assert is_pipeline_repr(node), "Must be node representation"
     if is_root_node(node):
         assert len(node.children) == 1, "Root can only have 1 child"
-        return to_json(node.children[0])
+        return to_json(node.children[0], payload_as_str=payload_as_str)
     elif is_component_node(node):
-        return {node.label: [to_json(c) for c in node.children]}
+        return {
+            node.label:
+            [to_json(c, payload_as_str=payload_as_str) for c in node.children]
+        }
     elif is_param_node(node):
-        return node.payload
+        if payload_as_str:
+            return (node.payload[0], str(node.payload[1]))
+        else:
+            return node.payload
     else:
         raise TypeError("Unknown node type: {}".format(node.node_type))
 
@@ -469,6 +476,13 @@ def md5(obj):
     return hashlib.md5(s).hexdigest()
 
 
+def pipeline_tokenizer(pipeline_txt):
+    tokens = re.findall(r"\w+", pipeline_txt)
+    # add structural markers (), {}
+    extra = [c for c in pipeline_txt if c in "(){}"]
+    return tokens + extra
+
+
 def dot_stub_label(node):
     if is_root_node(node):
         return "root"
@@ -572,7 +586,7 @@ class Texter(object):
         if self.max_children is not None:
             children = children[:self.max_children]
 
-        for c in nchildren:
+        for c in children:
             self.ident_ct += 1
             self.to_text(c)
             self.ident_ct -= 1

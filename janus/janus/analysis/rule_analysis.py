@@ -196,6 +196,13 @@ def histogram_comprule_component(df):
     return ax
 
 
+def summarize_rule_type(df):
+    cts = df.groupby(["strategy", "type_str"]).size()
+    denom = df.groupby("strategy").size()
+    pcts = cts / denom
+    return pcts
+
+
 def ggflow_plot(df, x, y, path):
     # TODO: get ggflow up and running
     tmpfile = utils.get_tmpfile(suffix=".csv")
@@ -315,11 +322,14 @@ def main():
     ax = histogram_rule_type(df)
     savefig(ax, os.path.join(args.output_dir, "rule_type.pdf"))
 
+    df_summary = summarize_rule_type(df)
+    print(df_summary)
+
     if df_sampler is not None:
         df_sampler["strategy"] = "summarized"
         ax = histogram_rule_type(df_sampler)
         # remove y axis label (shared with other plot)
-        ax.get_yaxis().set_visible(False)
+        # ax.get_yaxis().set_visible(False)
         plt.tight_layout()
         savefig(ax, os.path.join(args.output_dir, "rule_type_summarized.pdf"))
 

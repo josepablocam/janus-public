@@ -14,7 +14,7 @@ DATASETS+="wine-quality-red "
 DATASETS+="wine-quality-white "
 
 # evaluation params
-MAX_TIME_MINS=60
+MAX_TIME_MINS=120
 TSP_CHECK_EVERY_SECS=$((5 * 60))
 TSP_DEADLOCK_SECS=$((20 * 60))
 HOLD_OUT_SIZE=0.5
@@ -36,6 +36,7 @@ then
 fi
 
 SEARCH_STRATEGIES="tpot random"
+
 
 # tsp params
 NPROCS=10

@@ -4,7 +4,6 @@ from collections import defaultdict
 import heapq
 import pickle
 import random
-import re
 import time
 import sys
 
@@ -16,13 +15,6 @@ import tqdm
 
 from janus.pipeline import pipeline_to_tree as pt
 from janus import utils
-
-
-def pipeline_tokenizer(s):
-  tokens = re.findall(r"\w+", s)
-  # add structural markers (), {}
-  extra = [c for c in s if c in "(){}"]
-  return tokens + extra
 
 
 class CorpusEntry(object):
@@ -80,7 +72,8 @@ class ApproximatePostSampler(object):
         # as text and tokenize with counts
         # this accoutns to some extent for structure with things
         # like count of parens, components etc
-        mat = CountVectorizer(tokenizer=pipeline_tokenizer).fit_transform(str_reps)
+        mat = CountVectorizer(
+            tokenizer=pt.pipeline_tokenizer).fit_transform(str_reps)
         # approximate distance using this text encoding
         approx_dist_mat = pairwise_distances(mat, mat)
         highest = approx_dist_mat.max(axis=0).reshape(-1, 1)

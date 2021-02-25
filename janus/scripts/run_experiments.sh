@@ -34,10 +34,11 @@ SCORING_FUN="f1_macro"
 
 NUM_TEST_PIPELINES=100
 NUM_REPAIRED_PIPELINES=1
+MAX_DISTANCE=10
 K=5
 SEARCH_STRATEGIES="tpot random"
-#REPAIR_STRATEGIES="weighted-transducer random-mutation rf-transducer"
-REPAIR_STRATEGIES="random-mutation weighted-transducer"
+REPAIR_STRATEGIES="random-mutation random-janus meta-learning janus"
+
 
 if [[ ! -z "${TEST_CONFIG}" ]]
 then
@@ -68,11 +69,11 @@ do
 
         for dataset in ${DATASETS}
         do
-          # excludes rules extracted from $dataset
-          rules_to_use=$(python scripts/utils.py \
-            --cmd remove_contains \
-            --arg1 ${RESULTS}/${rule_source}/*local-rules.pkl \
-            --arg2 ${dataset})
+            # excludes rules extracted from $dataset
+            rules_to_use=$(python scripts/utils.py \
+              --cmd remove_contains \
+              --arg1 ${RESULTS}/${rule_source}/*local-rules.pkl \
+              --arg2 ${dataset})
 
             for repair_strategy in ${REPAIR_STRATEGIES}
             do
@@ -87,6 +88,27 @@ do
                  continue
               fi
 
+              score_predictor_path="${output_dir}/${dataset}-score-predictor.pkl"
+              if [[ ${repair_strategy} == "meta-learning" ]] || [[ ${repair_strategy} == "meta-janus" ]]
+              then
+                  # if meta-learning in set of stratgies
+                  # need to train score predictor
+                  datasets_to_use=$(python scripts/utils.py \
+                    --cmd remove_contains \
+                    --arg1 ${RESULTS}/${rule_source}/*pipelines.pkl \
+                    --arg2 ${dataset})
+
+
+                  if [[ ! -f ${score_predictor_path} ]]
+                  then
+                    python -m janus.repair.meta_learning \
+                      --input ${datasets_to_use} \
+                      --output ${score_predictor_path} \
+                      --random_state ${FIXED_SEED}
+                  fi
+              fi
+
+
               tsp python -m janus.evaluation.synthetic_evaluation \
                 --rules ${rules_to_use} \
                 --predefined_strategy ${repair_strategy} \
@@ -94,10 +116,12 @@ do
                 --test "${RESULTS}/${pipeline_source}/${dataset}-pipelines.pkl" \
                 --idx_search "${RESULTS}/${pipeline_source}/${dataset}-pipelines.pkl-idx-search" \
                 --bound_num_repaired_pipelines ${NUM_REPAIRED_PIPELINES} \
+                --max_distance ${MAX_DISTANCE} \
                 --bound_k ${K} \
                 --cv ${CV} \
                 --scoring ${SCORING_FUN} \
                 --random_state ${FIXED_SEED} \
+                --score_predictor ${score_predictor_path} \
                 --output ${output_file}
             done
           done
@@ -107,28 +131,28 @@ done
 block-until-done-check-deadlocks $((${MAX_TIME_MINS} * 60)) $((${MAX_TIME_MINS} * 4 * 60))
 
 
-echo "Running user-script experiments"
-for search in ${SEARCH_STRATEGIES}
-do
-  output_dir="${RESULTS}/${search}-pipelines-with-${search}-rules/"
-  mkdir -p ${output_dir}
-  for repair_strategy in ${REPAIR_STRATEGIES}
-  do
-      output_file="${output_dir}/code-evaluation-${repair_strategy}.pkl"
-      tsp python -m janus.evaluation.code_evaluation \
-        --predefined_strategy ${repair_strategy} \
-        --rules ${RESULTS}/${search}/*local-rules.pkl \
-        --scripts janus/evaluation/user-scripts/*.py \
-        --bound_num_repaired_pipelines ${NUM_REPAIRED_PIPELINES} \
-        --scoring ${SCORING_FUN} \
-        --bound_k ${K} \
-        --cv ${CV} \
-        --random_state ${FIXED_SEED} \
-        --output ${output_file}
-  done
-done
-
-block-until-done-check-deadlocks $((${MAX_TIME_MINS} * 60)) $((${MAX_TIME_MINS} * 4 * 60))
+# echo "Running user-script experiments"
+# for search in ${SEARCH_STRATEGIES}
+# do
+#   output_dir="${RESULTS}/${search}-pipelines-with-${search}-rules/"
+#   mkdir -p ${output_dir}
+#   for repair_strategy in ${REPAIR_STRATEGIES}
+#   do
+#       output_file="${output_dir}/code-evaluation-${repair_strategy}.pkl"
+#       tsp python -m janus.evaluation.code_evaluation \
+#         --predefined_strategy ${repair_strategy} \
+#         --rules ${RESULTS}/${search}/*local-rules.pkl \
+#         --scripts janus/evaluation/user-scripts/*.py \
+#         --bound_num_repaired_pipelines ${NUM_REPAIRED_PIPELINES} \
+#         --scoring ${SCORING_FUN} \
+#         --bound_k ${K} \
+#         --cv ${CV} \
+#         --random_state ${FIXED_SEED} \
+#         --output ${output_file}
+#   done
+# done
+#
+# block-until-done-check-deadlocks $((${MAX_TIME_MINS} * 60)) $((${MAX_TIME_MINS} * 4 * 60))
 
 
 

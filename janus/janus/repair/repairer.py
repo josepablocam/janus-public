@@ -43,10 +43,14 @@ class RepairStatistics(object):
 
 
 class PipelineRepairer(object):
-    def __init__(self, enumerator, total_time=DEFAULT_TIMEOUT_TOTAL):
+    def __init__(self,
+                 enumerator,
+                 total_time=DEFAULT_TIMEOUT_TOTAL,
+                 max_distance=None):
         assert isinstance(enumerator, TreeEnumerator)
         self.enumerator = enumerator
         self.total_time = total_time
+        self.max_distance = max_distance
         self.debug_data = []
         self.statistics = RepairStatistics()
 
@@ -109,17 +113,39 @@ class PipelineRepairer(object):
                 time_budget_left -= (time.time() - iter_start_time)
                 continue
 
-            candidate_hash = pt.to_hashable_json(candidate_tree)
-
-            if candidate_hash in tried:
-                time_budget_left -= (time.time() - iter_start_time)
-                continue
-
             try:
                 compiled_candidate = pt.to_pipeline(candidate_tree)
             except Exception as err:
                 ct_tries += 1
                 self.statistics.record_failure(err)
+                time_budget_left -= (time.time() - iter_start_time)
+                continue
+
+            # convert back into tree for some important comparisons
+            # handles things like default param values etc
+            try:
+                candidate_tree = pt.to_tree(compiled_candidate)
+            except Exception as err:
+                # in case we hit some bizare case where
+                # we can't map back into a tree representation
+                # (shouldn't happen, but better safe than sorry)
+                ct_tries += 1
+                self.statistics.record_failure(err)
+                time_budget_left -= (time.time() - iter_start_time)
+                continue
+
+            if self.max_distance is not None and pt.tree_edit_distance(
+                    orig_tree, candidate_tree) > self.max_distance:
+                # not a valid "repair", too far away
+                time_budget_left -= (time.time() - iter_start_time)
+                continue
+
+            # compute hash on the tree representation of the *compiled* candidate
+            # which accounts for removed hyperparams being
+            # equivalent to setting default hyperparameter value
+            candidate_hash = pt.to_hashable_json(candidate_tree)
+
+            if candidate_hash in tried:
                 time_budget_left -= (time.time() - iter_start_time)
                 continue
 

@@ -64,12 +64,20 @@ def prepare_df(df, compute_dist=False):
         "dataset",
         "strategy",
         "id",
+        "test_scores",
         "mean_test_score",
         "graph",
         "timestamp",
+        "repair_time",
     ]]
     df_repaired = df_repaired[[
-        "dataset", "strategy", "id", "mean_test_score", "graph"
+        "dataset",
+        "strategy",
+        "id",
+        "mean_test_score",
+        "graph",
+        "test_scores",
+        "repair_time",
     ]]
 
     df_combined = pd.merge(
@@ -82,10 +90,11 @@ def prepare_df(df, compute_dist=False):
     if compute_dist:
         dist = [
             None if pd.isnull(repaired) else pt.tree_edit_distance(
-                orig, repaired) for orig, repaired in tqdm.tqdm(
-                    list(
-                        zip(df_combined["graph_orig"],
-                            df_combined["graph_repaired"])))
+                pt.to_pipeline(orig), pt.to_pipeline(repaired))
+            for orig, repaired in tqdm.tqdm(
+                list(
+                    zip(df_combined["graph_orig"],
+                        df_combined["graph_repaired"])))
         ]
     else:
         dist = np.nan
@@ -104,9 +113,13 @@ def prepare_df(df, compute_dist=False):
 
     df_combined["score_diff"] = df_combined[
         "mean_test_score_repaired"] - df_combined["mean_test_score_orig"]
+    df_combined["had_effect"] = df_combined["score_diff"].abs() >= 0.01
+
     df_combined["improved"] = (df_combined["score_diff"] >
-                               0) & (~pd.isnull(df_combined["score_diff"]))
+                               0) & df_combined["had_effect"]
     df_combined["improved_int"] = df_combined["improved"].astype(int)
+    df_combined["hurt"] = (df_combined["score_diff"] <
+                           0) & df_combined["had_effect"]
     df_combined["has_repair"] = ~pd.isnull(
         df_combined["mean_test_score_repaired"])
     df_combined["dummy"] = 1
@@ -177,24 +190,161 @@ def summarize_df(df):
         df[df["score_diff"] > 0], "distance", groupcols=groupcols, op="mean"),
           "\n")
 
+    print("Stat: Mean repair time")
+    print(stat_by_strategy(
+        df,
+        "repair_time_repaired",
+        groupcols=["dataset", "strategy"],
+        op="mean"))
+
+
+def get_palette(df):
+    strats = sorted(df["strategy"].unique())
+    colors = sns.color_palette("colorblind", len(strats))
+    return strats, {s: c for s, c in zip(strats, colors)}
+
+
+def get_bootstrap(func, vals, num_iters, low, hi, random_state=None):
+    num_obs = len(vals)
+    rng = np.random.RandomState(random_state)
+
+    boot_samples = rng.choice(vals, size=(num_iters, num_obs))
+    boot_ests = np.apply_along_axis(func, 1, boot_samples)
+    obs_val = func(vals)
+
+    boot_diffs = boot_ests - obs_val
+
+    low_diff = np.percentile(boot_diffs, low)
+    hi_diff = np.percentile(boot_diffs, hi)
+    # note the order of the differences
+    result = (obs_val - hi_diff, obs_val, obs_val - low_diff)
+    assert result[0] < result[1] < result[2]
+    return result
+
+
+def get_rng(strategy):
+    return sum(ord(c) for c in strategy)
+
+
+def table_fraction_outcome(df, column, get_bold, random_state=None):
+    mean_with_ci = lambda d, rs: get_bootstrap(
+        np.mean, d, 1000, 5.0, 95.0, random_state=rs
+    )
+    df_res = df.groupby(["dataset", "strategy"]).apply(
+        lambda d: mean_with_ci(d[column].values, get_rng(d["strategy"].iloc[0]))
+    )
+    df_res = df_res.to_frame(name="change_with_ci").reset_index()
+
+    format_text = "{:.2f} ({:.2f}-{:.2f})"
+    df_res["val_text"] = df_res["change_with_ci"].map(
+        lambda t: format_text.format(t[1], t[0], t[2]))
+
+    df_res["mean_val"] = df_res["change_with_ci"].map(lambda t: t[1])
+
+
+
+    # bold the highest value per dataset
+    df_res["rank"] = df_res.groupby(["dataset"])["mean_val"].rank(
+        "dense", ascending=False)
+
+    df_res["with_bold"] = df_res.groupby(["dataset"])["mean_val"].apply(get_bold)
+    df_res["val_text"] = [
+        "\\textbf{{{}}}".format(txt) if bold else txt
+        for bold, txt in zip(df_res["with_bold"], df_res["val_text"])
+    ]
+    df_res = df_res[["dataset", "strategy", "val_text"]]
+    df_pv = pd.pivot(
+        df_res, index="dataset", columns="strategy", values="val_text")
+    df_pv = df_pv.reset_index()
+    # escape ourselves
+    df_pv["dataset"] = df_pv["dataset"].map(lambda x: x.replace("_", "\\_"))
+    return df_pv
+
+
+def table_fraction_repaired(df, random_state=None):
+    return table_fraction_outcome(
+        df, "improved", lambda x: x == max(x), random_state=random_state)
+
+
+def table_fraction_hurt(df, random_state=None):
+    return table_fraction_outcome(
+        df, "hurt", lambda x: x == min(x), random_state=random_state)
+
 
 def plot_fraction_repaired(df):
     fig, ax = plt.subplots(1)
-    sns.pointplot(
+    hue_order, palette = get_palette(df)
+
+    sns.barplot(
         data=df,
         x="improved",
         y="dataset",
         hue="strategy",
         estimator=np.mean,
-        linestyles=["None"] * len(df["strategy"].unique()),
+        # linestyles=["None"] * len(df["strategy"].unique()),
         dodge=True,
         ci=95,
         ax=ax,
+        orient="h",
+        palette=palette,
+        hue_order=hue_order,
     )
     ax.set_xlabel("Fraction of Pipelines Improved")
     ax.set_ylabel("Dataset")
-    ax.set_xlim(0.0, 0.65)
-    plt.legend(loc="center right", bbox_to_anchor=(0., 1.02, 1., .102), ncol=2)
+    plt.legend(
+        loc="center right", bbox_to_anchor=(0.0, 1.05, 1., .102), ncol=2)
+    plt.tight_layout()
+    return ax
+
+
+def plot_fraction_repaired_rank(df):
+    # rank systems
+    # by fraction repaired
+    # and then count the ranks
+    fig, ax = plt.subplots(1)
+    df_frac = df.groupby(["dataset", "strategy"])[["improved"]].mean()
+    df_frac = df_frac.reset_index()
+    df_frac["rank"] = df_frac.groupby(["dataset"])["improved"].rank(
+        "dense", ascending=False)
+
+    hue_order, palette = get_palette(df_frac)
+
+    sns.countplot(
+        data=df_frac,
+        x="rank",
+        hue="strategy",
+        dodge=True,
+        ax=ax,
+        palette=palette,
+        hue_order=hue_order,
+    )
+    ax.set_xlabel("Rank")
+    ax.set_ylabel("Datasets")
+    plt.legend(
+        loc="center right", bbox_to_anchor=(0.0, 1.05, 1., .102), ncol=2)
+    plt.tight_layout()
+    return ax
+
+
+def plot_fraction_candidate(df):
+    fig, ax = plt.subplots(1)
+    df = df.copy()
+    sns.barplot(
+        data=df,
+        x="has_repair",
+        y="dataset",
+        hue="strategy",
+        estimator=np.mean,
+        # linestyles=["None"] * len(df["strategy"].unique()),
+        dodge=True,
+        ci=95,
+        ax=ax,
+        orient="h",
+    )
+    ax.set_xlabel("Fraction of Pipelines with Repair Candidate")
+    ax.set_ylabel("Dataset")
+    plt.legend(
+        loc="center right", bbox_to_anchor=(0.0, 1.05, 1., .102), ncol=2)
     plt.tight_layout()
     return ax
 
@@ -241,12 +391,12 @@ def plot_score_improvement(df):
     # )
     sns.pointplot(
         data=df,
-        x="score_diff",
-        y="dataset",
+        x="dataset",
+        y="score_diff",
         hue="strategy",
         linestyles=["None"] * len(df["strategy"].unique()),
         estimator=np.mean,
-        dodge=True,
+        dodge=10,
         ci=95,
         ax=ax,
     )
@@ -267,7 +417,7 @@ def plot_score_improvement_st_distance(df):
     # now only consider cases where the random-mutation
     # had an edit distance <= the corresponding edit distance
     # for the janus repair
-    df_janus = df[df["strategy"] == "janus"]
+    df_janus = df[df["strategy"] == "Janus"]
     df_janus = df_janus[["dataset", "id", "distance"]]
     df_janus = df_janus.rename(columns={"distance": "distance_compare"})
     assert df_janus.shape[0] > 0
@@ -306,7 +456,7 @@ def plot_fraction_repaired_st_distance(df):
     # now only consider cases where the random-mutation
     # had an edit distance <= the corresponding edit distance
     # for the janus repair
-    df_janus = df[df["strategy"] == "janus"]
+    df_janus = df[df["strategy"] == "Janus"]
     df_janus = df_janus[["dataset", "id", "distance"]]
     df_janus = df_janus.rename(columns={"distance": "distance_compare"})
     assert df_janus.shape[0] > 0
@@ -333,20 +483,51 @@ def plot_fraction_repaired_st_distance(df):
     return ax
 
 
-def plot_cdf_score_diff(df):
+def plot_cdf_score_diff(df, filter_fun=None):
     df = df.copy()
     # don't count pipelines that were originally broken
     df = df[~pd.isnull(df["mean_test_score_orig"])]
-    # but for cases where the repaired is broken
-    # we say that it gets score 0.0
-    df["mean_test_score_repaired"] = df["mean_test_score_repaired"].fillna(0.0)
+    # we compute this only for cases where the tools
+    # produce a repair candidate (i.e. not nan)
+    df = df[~pd.isnull(df["mean_test_score_repaired"])]
+    # df["mean_test_score_repaired"] = df["mean_test_score_repaired"].fillna(0.0)
     df["score_diff"] = df["mean_test_score_repaired"] - df[
         "mean_test_score_orig"]
     assert not pd.isnull(df["score_diff"]).any()
+    if filter_fun is not None:
+        df = filter_fun(df)
+
+    hue_order, palette = get_palette(df)
     fig, ax = plt.subplots(1)
-    sns.ecdfplot(data=df, x="score_diff", hue="strategy", ax=ax)
+    sns.ecdfplot(
+        data=df,
+        x="score_diff",
+        hue="strategy",
+        ax=ax,
+        palette=palette,
+        hue_order=hue_order,
+    )
+
     ax.set_xlabel("Pipeline score change")
     ax.set_ylabel("Empirical CDF")
+
+    # add avg values to the legend
+    df_mean = df.groupby("strategy")["score_diff"].mean()
+    df_mean = df_mean.to_frame(name="mean").reset_index()
+    mean_map = {s: m for s, m in zip(df_mean["strategy"], df_mean["mean"])}
+
+    # create our own legend...for some reason
+    # ecdf legend is busted when we try to set number of columns
+    handles = [
+        matplotlib.patches.Patch(
+            color=palette[h],
+            label="{} (avg={}{:.3f})".format(h, "+" if mean_map[h] > 0 else "",
+                                             mean_map[h]),
+        ) for h in hue_order
+    ]
+    plt.legend(loc="best", ncol=1, handles=handles)
+    # plt.legend(
+    #     loc="center right", bbox_to_anchor=(0.0, 1.05, 1., .102), ncol=2)
     plt.tight_layout()
     return ax
 
@@ -379,6 +560,9 @@ def plot_dist_score_diff(df):
 
 def plot_cdf_distance(df):
     df = df[df["improved"]]
+    print("Mean distance for improved pipelines")
+    print(df.groupby("strategy")["distance"].mean())
+
     print("Fraction of repair with distance > 10")
     df = df.copy()
     df["distance_over_10"] = df["distance"] > 10.0
@@ -408,6 +592,7 @@ def stat_test_count_improved(
     pv = pd.pivot_table(
         df, index=["dataset", "id"], columns="strategy",
         values="improved").reset_index()
+
     pvg = pv.groupby(strategies).size()
     pvg = pvg.to_frame(name="ct").reset_index()
     pvg_pv = pd.pivot_table(
@@ -416,6 +601,8 @@ def stat_test_count_improved(
         columns=strategies[1],
         values="ct",
     )
+    print("Contingency table")
+    print(pvg_pv)
     # non-parametric for paired tests
     utils.set_seed(random_state)
     if pd.isnull(pvg_pv.values.flatten()).any():
@@ -444,7 +631,7 @@ def stat_test_score_diff_improvements(df,
     strategies_present = df["strategy"].unique()
     if len(strategies_present) == 1:
         print("Single strategy", strategies_present[0])
-        print("Can't compute paired t-test")
+        print("Can't compute paired score test")
         return None, None
 
     pv_df = pd.pivot_table(
@@ -460,7 +647,8 @@ def stat_test_score_diff_improvements(df,
     scores_0 = pv_df[strategies[0]]
     scores_1 = pv_df[strategies[1]]
     utils.set_seed(random_state)
-    stat, p_value = scipy.stats.ttest_rel(scores_0, scores_1)
+    stat, p_value = scipy.stats.wilcoxon(scores_0, scores_1)
+    # stat, p_value = scipy.stats.ttest_rel(scores_0, scores_1)
     if num_comparisons is not None:
         p_value = p_value * num_comparisons
     return stat, p_value
@@ -529,14 +717,14 @@ def get_args():
         help="Strategies to include (all if None)",
     )
     parser.add_argument(
+        "--stat_comparisons",
+        type=str,
+        nargs="+",
+        help="list of the form <strategy1>:<strategy2>")
+    parser.add_argument(
         "--compute_distance",
         action="store_true",
         help="Compute tree edit distance for all repairs",
-    )
-    parser.add_argument(
-        "--num_comparisons",
-        type=int,
-        help="Number of comparisons for Bonferroni adjustment",
     )
     parser.add_argument(
         "--sample_n",
@@ -584,9 +772,11 @@ def main():
         mapped_labels = [l.split(":") for l in args.labels]
         assert all(len(p) == 2 for p in mapped_labels)
         mapped_labels = dict(mapped_labels)
-        prepared_df["strategy"] = prepared_df["strategy"].map(mapped_labels)
-        combined_df["strategy"] = combined_df["strategy"].map(mapped_labels)
-        args.strategies = [mapped_labels[s] for s in args.strategies]
+        prepared_df["strategy"] = prepared_df["strategy"].map(
+            lambda x: mapped_labels.get(x, x))
+        combined_df["strategy"] = combined_df["strategy"].map(
+            lambda x: mapped_labels.get(x, x))
+        args.strategies = [mapped_labels.get(s, s) for s in args.strategies]
 
     pd.set_option("display.max_rows", 500)
     pd.set_option("display.max_columns", 500)
@@ -600,23 +790,29 @@ def main():
         for s in strategies:
             sample_examples(prepared_df, s, args.sample_n, args.random_state)
 
-    if args.strategies is not None:
-        print("McNemar Paired Test (number of improvements)")
-        stat, p_value = stat_test_count_improved(
-            prepared_df,
-            args.strategies,
-            num_comparisons=args.num_comparisons,
-            random_state=args.random_state,
-        )
-        print("Stat: {}, p-value: {}".format(stat, p_value))
+    if args.stat_comparisons is not None:
+        pairs = [entry.split(":") for entry in args.stat_comparisons]
+        # 2 tests per pair
+        num_comparisons = len(pairs) * 2
+        for pair in pairs:
+            print("Statistical tests for: {}".format(pair))
+            print("McNemar Paired Test (number of improvements)")
+            stat, p_value = stat_test_count_improved(
+                prepared_df,
+                pair,
+                num_comparisons=num_comparisons,
+                random_state=args.random_state,
+            )
+            print("Stat: {}, p-value: {}".format(stat, p_value))
 
-        print("Paired t-test (Score diff for improvements)")
-        stat, p_value = stat_test_score_diff_improvements(
-            prepared_df,
-            args.strategies,
-            num_comparisons=args.num_comparisons,
-        )
-        print("Stat: {}, p-value: {}".format(stat, p_value))
+            print("Wilcoxon Signed Rank Test (Score diff for improvements)")
+            stat, p_value = stat_test_score_diff_improvements(
+                prepared_df,
+                pair,
+                num_comparisons=num_comparisons,
+                random_state=args.random_state,
+            )
+            print("Stat: {}, p-value: {}".format(stat, p_value))
 
     if args.output_dir is None:
         return 0
@@ -626,6 +822,28 @@ def main():
     ax = plot_fraction_repaired(prepared_df)
     ax.get_figure().savefig(
         os.path.join(args.output_dir, "fraction_repaired.pdf"))
+
+    tbl = table_fraction_repaired(prepared_df, random_state=args.random_state)
+    tbl.to_latex(
+        os.path.join(args.output_dir, "fraction_repaired.tex"),
+        escape=False,
+        index=False,
+    )
+
+    tbl = table_fraction_hurt(prepared_df, random_state=args.random_state)
+    tbl.to_latex(
+        os.path.join(args.output_dir, "fraction_hurt.tex"),
+        escape=False,
+        index=False,
+    )
+
+    ax = plot_fraction_repaired_rank(prepared_df)
+    ax.get_figure().savefig(
+        os.path.join(args.output_dir, "fraction_repaired_rank.pdf"))
+
+    ax = plot_fraction_candidate(prepared_df)
+    ax.get_figure().savefig(
+        os.path.join(args.output_dir, "fraction_candidate.pdf"))
 
     ax = fraction_repaired_over_time(prepared_df)
     ax.get_figure().savefig(
@@ -651,6 +869,19 @@ def main():
         ax = plot_fraction_repaired_st_distance(prepared_df)
         ax.get_figure().savefig(
             os.path.join(args.output_dir, "fraction_repaired_st_distance.pdf"))
+
+    ax = plot_cdf_score_diff(prepared_df)
+    ax.get_figure().savefig(
+        os.path.join(args.output_dir, "score_diff_cdf.pdf"))
+
+    ax = plot_cdf_score_diff(
+        prepared_df, filter_fun=lambda df: df[df["improved"]])
+    ax.get_figure().savefig(
+        os.path.join(args.output_dir, "score_diff_cdf_improved.pdf"))
+
+    ax = plot_cdf_score_diff(prepared_df, filter_fun=lambda df: df[df["hurt"]])
+    ax.get_figure().savefig(
+        os.path.join(args.output_dir, "score_diff_cdf_hurt.pdf"))
 
     ax = plot_cdf_score_diff(prepared_df)
     ax.get_figure().savefig(

@@ -74,11 +74,13 @@ class BaseUnweightedRuleSampler(RuleSampler):
 
 
 class RandomRuleSampler(BaseUnweightedRuleSampler):
-    def sample_rules(self, c, random_state=None):
+    def sample_rules(self, c, return_proba=False, random_state=None):
         node_key = get_node_key(c)
         # can always applied identity
         candidate_rules = [None]
         if node_key is None or node_key not in self.rule_map:
+            if return_proba:
+                candidate_rules = [(None, 0.0)]
             return candidate_rules
 
         candidate_rules.extend(self.rule_map[node_key])
@@ -86,7 +88,15 @@ class RandomRuleSampler(BaseUnweightedRuleSampler):
             np.random.RandomState(random_state).shuffle(candidate_rules)
         else:
             self.random_state.shuffle(candidate_rules)
+
+        if return_proba:
+            candidate_rules = [(r, self.get_probability())
+                               for r in candidate_rules]
+
         return candidate_rules
+
+    def get_probability(self, *args, **kwargs):
+        return self.random_state.uniform()
 
 
 class ScoreRuleSampler(BaseUnweightedRuleSampler):
@@ -279,11 +289,11 @@ class RulePredictor(object):
 
 class PredictiveRuleSampler(RuleSampler):
     def __init__(
-        self,
-        rules,
-        component_predictor=None,
-        hyperparam_predictor=None,
-        random_state=None,
+            self,
+            rules,
+            component_predictor=None,
+            hyperparam_predictor=None,
+            random_state=None,
     ):
         if isinstance(rules, RuleCorpus):
             rules = rules.rules
@@ -350,6 +360,9 @@ class PredictiveRuleSampler(RuleSampler):
 
 
 def get_rule_sampler(strategy, corpus, random_state=None):
+    if strategy is None:
+        return None
+
     if strategy == "random":
         rule_sampler = RandomRuleSampler(corpus, random_state=random_state)
     elif strategy == "score":

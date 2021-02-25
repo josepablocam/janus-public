@@ -6,11 +6,13 @@ source scripts/utils.sh
 SEED=42
 output_dir=$(realpath "${ANALYSIS}/system-diagram")
 mkdir -p ${output_dir}
+output_path=${output_dir}/paper_example.output
 
 python -m janus.evaluation.paper_example \
   --input_dir ${RESULTS} \
   --output_dir ${output_dir} \
-  --seed ${SEED}
+  --seed ${SEED} \
+  | tee ${output_path}
 
 
 pushd ${ANALYSIS}

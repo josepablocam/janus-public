@@ -3,6 +3,7 @@ from argparse import ArgumentParser
 import os
 import pickle
 import random
+import time
 import sys
 
 import numpy as np
@@ -22,13 +23,9 @@ from janus.repair.local_rules import (
     ComponentInsert,
     RuleCorpus,
 )
-from janus.repair.tree_enumerator import (
-    get_tree_enumerator,
-)
-from janus.repair.rule_sampler import (
-    get_rule_sampler,
-)
+from janus.repair.repair_tools import get_repair_tools
 from janus.repair.repairer import PipelineRepairer
+from janus.repair.meta_learning import PipelineScorePredictor
 from janus import utils
 from janus import mp_utils
 
@@ -39,20 +36,21 @@ else:
 
 
 def run_single_tree(
-    X_search,
-    y_search,
-    X_test,
-    y_test,
-    test_pipeline_tree,
-    enumerator,
-    bound_num_repaired_pipelines,
-    dev_cv=3,
-    bound_k=3,
-    cv=5,
-    scoring="f1_macro",
-    random_state=42,
+        X_search,
+        y_search,
+        X_test,
+        y_test,
+        test_pipeline_tree,
+        enumerator,
+        bound_num_repaired_pipelines,
+        dev_cv=3,
+        bound_k=3,
+        max_distance=None,
+        cv=5,
+        scoring="f1_macro",
+        random_state=42,
 ):
-    repairer = PipelineRepairer(enumerator)
+    repairer = PipelineRepairer(enumerator, max_distance=max_distance)
 
     results_summary = []
     orig_info = {
@@ -61,7 +59,6 @@ def run_single_tree(
     }
 
     orig_compiled = pt.to_pipeline(test_pipeline_tree)
-
 
     # TODO: this should be a param
     # should be about 5% of dataset, since search is 50%
@@ -76,6 +73,8 @@ def run_single_tree(
     y_search = y_search[:num_obs_search]
 
     utils.set_seed(random_state)
+
+    repair_start_time = time.time()
     repaired = repairer.repair(
         orig_compiled,
         X_search,
@@ -87,6 +86,7 @@ def run_single_tree(
         random_state=random_state,
         verbosity=1,
     )
+    repair_time = time.time() - repair_start_time
 
     try:
         print("Evaluate original")
@@ -132,6 +132,7 @@ def run_single_tree(
     else:
         orig_info["no_repaired_candidates"] = False
 
+    orig_info["repairer_statistics"] = None
     results_summary.append(orig_info)
 
     repair_info = {
@@ -159,16 +160,17 @@ def run_single_tree(
         )
         repair_info["test_scores"] = repaired_results["test_score"]
         repair_info["mean_test_score"] = np.mean(
-            repaired_results["test_score"]
-        )
+            repaired_results["test_score"])
         repair_info["failed"] = False
         repair_info["timedout"] = False
+        repair_info["repair_time"] = repair_time
     except mp_utils.TimeoutError:
         print("Timedout on repair pipeline")
-        orig_info["failed"] = True
-        orig_info["timedout"] = True
-        orig_info["test_scores"] = []
-        orig_info["mean_test_score"] = np.nan
+        repair_info["failed"] = True
+        repair_info["timedout"] = True
+        repair_info["test_scores"] = []
+        repair_info["mean_test_score"] = np.nan
+        repair_info["repair_time"] = np.nan
     except Exception as err:
         print("Failed to run repaired pipeline")
         print(err)
@@ -176,24 +178,26 @@ def run_single_tree(
         repair_info["mean_test_score"] = np.nan
         repair_info["failed"] = True
         repair_info["timedout"] = False
+        repair_info["repair_time"] = np.nan
+
 
     repair_info["repairer_statistics"] = repairer.statistics
-    orig_info["repairer_statistics"] = None
     results_summary.append(repair_info)
     return pd.DataFrame(results_summary)
 
 
 def run_evaluation(
-    dataset,
-    timestamped_test_pipeline_trees,
-    enumerator,
-    bound_num_repaired_pipelines,
-    idx_search,
-    dev_cv=3,
-    bound_k=3,
-    cv=5,
-    scoring="f1_macro",
-    random_state=42,
+        dataset,
+        timestamped_test_pipeline_trees,
+        enumerator,
+        bound_num_repaired_pipelines,
+        idx_search,
+        dev_cv=3,
+        bound_k=3,
+        max_distance=None,
+        cv=5,
+        scoring="f1_macro",
+        random_state=42,
 ):
     results = []
 
@@ -206,8 +210,8 @@ def run_evaluation(
     X_search, y_search = X[idx_search], y[idx_search]
     X_test, y_test = X[idx_test], y[idx_test]
 
-    for ix, elem in tqdm.tqdm(list(
-            enumerate(timestamped_test_pipeline_trees))):
+    for ix, elem in tqdm.tqdm(
+            list(enumerate(timestamped_test_pipeline_trees))):
         if isinstance(elem, tuple):
             tree, timestamp = elem
         else:
@@ -224,6 +228,7 @@ def run_evaluation(
             bound_num_repaired_pipelines,
             dev_cv=dev_cv,
             bound_k=bound_k,
+            max_distance=max_distance,
             cv=cv,
             scoring=scoring,
             random_state=random_state + ix,
@@ -232,10 +237,11 @@ def run_evaluation(
         tree_results["scoring"] = scoring
         tree_results["cv"] = cv
         tree_results["bound_k"] = bound_k
-        tree_results["bound_num_repaired_pipelines"
-                     ] = bound_num_repaired_pipelines
+        tree_results[
+            "bound_num_repaired_pipelines"] = bound_num_repaired_pipelines
         tree_results["random_state"] = random_state + ix
         tree_results["timestamp"] = timestamp
+        tree_results["max_distance"] = max_distance
         results.append(tree_results)
     df_results = pd.concat(results, axis=0)
     return df_results
@@ -243,8 +249,7 @@ def run_evaluation(
 
 def get_args():
     parser = ArgumentParser(
-        description="Evaluate repairs on a set of existing pipelines"
-    )
+        description="Evaluate repairs on a set of existing pipelines")
     parser.add_argument(
         "--rules",
         type=str,
@@ -263,8 +268,21 @@ def get_args():
     )
     parser.add_argument(
         "--predefined_strategy",
-        choices=["weighted-transducer", "rf-transducer", "random-mutation"],
+        # choices=[
+        #     "weighted-transducer",
+        #     "rf-transducer",
+        #     "random-mutation",
+        #     "random-transducer",
+        #     "classifier-swap",
+        #     "meta-learning",
+        #     "meta-janus",
+        # ],
         help="Predefined strategies",
+    )
+    parser.add_argument(
+        "--score_predictor",
+        type=str,
+        help="Path to pipeline score meta learning model",
     )
     parser.add_argument(
         "--test",
@@ -287,6 +305,11 @@ def get_args():
         type=int,
         help="Enumerator-specific bound k (limiting number of rules applied)",
         default=3,
+    )
+    parser.add_argument(
+        "--max_distance",
+        type=int,
+        help="Max distance for a repair",
     )
     parser.add_argument(
         "--idx_search",
@@ -331,41 +354,16 @@ def main():
         np.random.seed(args.random_state)
         random.seed(args.random_state)
 
-    rules = []
-    if args.predefined_strategy is not None:
-        assert args.rule_strategy is None
-        assert args.enumeration_strategy is None
-    if args.predefined_strategy == "weighted-transducer":
-        args.rule_strategy = "weighted"
-        args.enumeration_strategy = "beam"
-    elif args.predefined_strategy == "rf-transducer":
-        args.rule_strategy = "predictive"
-        args.enumeration_strategy = "beam"
-    elif args.predefined_strategy == "random-mutation":
-        args.rule_strategy = "mutation"
-        args.enumeration_strategy = "beam"
-        args.bound_k = args.bound_num_repaired_pipelines
-    else:
-        raise Exception(
-            "Unknown predefined_strategy: " + args.predefined_strategy
-        )
-    rules = []
-    if args.rule_strategy != "mutation":
-        for p in args.rules:
-            with open(p, "rb") as fin:
-                rule_corpus = pickle.load(fin)
-                rules.extend(rule_corpus.rules)
-    rule_sampler = get_rule_sampler(
-        args.rule_strategy,
-        rules,
-        args.random_state,
-    )
-    enumerator = get_tree_enumerator(
-        args.enumeration_strategy,
-        rule_sampler,
-        force_apply=(args.rule_strategy == "mutation")
+    tools = get_repair_tools(
+        predefined_strategy=args.predefined_strategy,
+        rule_strategy=args.rule_strategy,
+        enumeration_strategy=args.enumeration_strategy,
+        score_predictor=args.score_predictor,
+        rules_paths=args.rules,
+        random_state=args.random_state,
     )
 
+    enumerator = tools["tree_enumerator"]
     df_test_data = pd.read_pickle(args.test)
     # only focus on pipelines that worked before
     df_test_data = df_test_data[~df_test_data["failed"]]
@@ -382,7 +380,7 @@ def main():
     # graph representation of the pipeline
     test_trees = df_test_data["obj_graph"].values
     timestamps = df_test_data["timestamp"].values
-    timestamped_test_trees = zip(test_trees, timestamps)
+    timestamped_test_trees = list(zip(test_trees, timestamps))
 
     test_dataset_name = df_test_data.iloc[0]["dataset"]
     test_dataset = utils.get_dataset(
@@ -401,6 +399,7 @@ def main():
         idx_search=idx_search,
         dev_cv=args.dev_cv,
         bound_k=args.bound_k,
+        max_distance=args.max_distance,
         cv=args.cv,
         scoring=args.scoring,
         random_state=args.random_state,
@@ -424,6 +423,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as err:
+        print(err)
         import pdb
         pdb.post_mortem()
         sys.exit(1)

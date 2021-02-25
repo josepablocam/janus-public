@@ -24,10 +24,7 @@ from janus.repair.local_rules import (
     ComponentInsert,
     RuleCorpus,
 )
-from janus.repair.tree_enumerator import (
-    get_tree_enumerator, )
-from janus.repair.rule_sampler import (
-    get_rule_sampler, )
+from janus.repair.repair_tools import get_repair_tools
 from janus.repair.repairer import PipelineRepairer
 from janus import utils
 from janus import mp_utils
@@ -144,7 +141,10 @@ def get_args():
     )
     parser.add_argument(
         "--predefined_strategy",
-        choices=["weighted-transducer", "rf-transducer", "random-mutation"],
+        choices=[
+            "weighted-transducer", "rf-transducer", "random-mutation",
+            "random-transducer", "classifier-swap", "meta-learning"
+        ],
         help="Predefined strategies",
     )
     parser.add_argument(
@@ -214,39 +214,15 @@ def main():
         np.random.seed(args.random_state)
         random.seed(args.random_state)
 
-    rules = []
-    if args.predefined_strategy is not None:
-        assert args.rule_strategy is None
-        assert args.enumeration_strategy is None
-    if args.predefined_strategy == "weighted-transducer":
-        args.rule_strategy = "weighted"
-        args.enumeration_strategy = "beam"
-    elif args.predefined_strategy == "rf-transducer":
-        args.rule_strategy = "predictive"
-        args.enumeration_strategy = "beam"
-    elif args.predefined_strategy == "random-mutation":
-        args.rule_strategy = "mutation"
-        args.enumeration_strategy = "beam"
-        args.bound_k = args.bound_num_repaired_pipelines
-    else:
-        raise Exception("Unknown predefined_strategy: " +
-                        args.predefined_strategy)
-
-    rules = []
-    if args.rule_strategy != "mutation":
-        for p in args.rules:
-            with open(p, "rb") as fin:
-                rule_corpus = pickle.load(fin)
-                rules.extend(rule_corpus.rules)
-    rule_sampler = get_rule_sampler(
-        args.rule_strategy,
-        rules,
-        args.random_state,
+    tools = get_repair_tools(
+        predefined_strategy=args.predefined_strategy,
+        rule_strategy=args.rule_strategy,
+        enumeration_strategy=args.enumeration_strategy,
+        rules_paths=args.rules,
+        random_state=args.random_state,
     )
-    enumerator = get_tree_enumerator(
-        args.enumeration_strategy,
-        rule_sampler,
-        force_apply=(args.rule_strategy == "mutation"))
+
+    enumerator = tools["tree_enumerator"]
 
     df_results = run_evaluation(
         args.scripts,

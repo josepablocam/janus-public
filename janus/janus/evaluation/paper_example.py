@@ -193,7 +193,7 @@ def main():
     df = pd.read_pickle(
         os.path.join(
             args.input_dir,
-            "tpot-pipelines-with-tpot-rules/car-evaluation-synthetic-evaluation-weighted-transducer.pkl"
+            "tpot-pipelines-with-tpot-rules/car-evaluation-synthetic-evaluation-janus.pkl"
         ))
     prepared_df = pa.prepare_df(df, compute_dist=True)
     improved = prepared_df[prepared_df["improved"]]
@@ -239,6 +239,15 @@ def main():
     ix = 0
     orig = improved.iloc[ix].graph_orig
     repaired = improved.iloc[ix].graph_repaired
+
+    print("Orig graph")
+    print(pt.to_text(orig))
+
+    print("-----------")
+
+    print("Repaired graph")
+    print(pt.to_text(repaired))
+
     print("Score improvement: ", improved.iloc[ix].score_diff)
     print("From: ", improved.iloc[ix].mean_test_score_orig)
     print("To: ", improved.iloc[ix].mean_test_score_repaired)

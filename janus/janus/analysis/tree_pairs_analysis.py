@@ -27,7 +27,17 @@ def create_distance_df(corpus):
 
 def plot_distance_ecdf(df):
     fig, ax = plt.subplots(1)
-    sns.ecdfplot(data=df, x="distance", hue="method", ax=ax)
+    methods = sorted(df["method"].unique())
+    colors = sns.color_palette("colorblind", len(methods))
+    palette = {m: c for m, c in zip(methods, colors)}
+    sns.ecdfplot(
+        data=df,
+        x="distance",
+        hue="method",
+        ax=ax,
+        palette=palette,
+        hue_order=methods,
+    )
     return ax
 
 
@@ -56,6 +66,9 @@ def main():
             compute_times[corpus.sample_method].append(corpus.compute_time)
 
     combined_dist_df = pd.concat(dist_dfs, axis=0)
+    print("Number of pipeline pairs")
+    print(combined_dist_df.groupby("method").size())
+
     dist_ecdf = plot_distance_ecdf(combined_dist_df)
     dist_ecdf.get_figure().savefig(
         os.path.join(args.output_dir, "distance_ecdf.pdf"))
